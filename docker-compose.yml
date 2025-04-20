@@ -1,0 +1,77 @@
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: Y
+      SA_PASSWORD: "Password123!"
+      MSSQL_SA_PASSWORD: "Password123!"
+      MSSQL_PID: Express
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    ports:
+      - 1433:1433
+    networks:
+      - app-network
+    healthcheck:
+      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "Password123!" -Q "SELECT 1" || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  db-init:
+    image: mcr.microsoft.com/mssql-tools:latest
+    environment:
+      ACCEPT_EULA: Y
+    command: >
+      bash -c '
+        echo "Waiting for SQL Server to start up..."
+        sleep 20
+        echo "Creating keycloak database..."
+        /opt/mssql-tools/bin/sqlcmd -S sqlserver -U sa -P "Password123!" -Q "CREATE DATABASE keycloak"
+        echo "Database created successfully!"
+      '
+    depends_on:
+      sqlserver:
+        condition: service_started
+    networks:
+      - app-network
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: mssql
+      KC_DB_URL: jdbc:sqlserver://sqlserver:1433;databaseName=keycloak;trustServerCertificate=true
+      KC_DB_USERNAME: sa
+      KC_DB_PASSWORD: "Password123!"
+    volumes:
+      - ./import:/opt/keycloak/data/import
+      - ./my-siemens-theme:/opt/keycloak/themes/my-siemens-theme
+    ports:
+      - 8080:8080
+    command: start-dev --import-realm --spi-theme-cache-themes=false --spi-theme-static-max-age=-1
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - app-network
+
+  angular-app:
+    build:
+      context: ./KeycloakUI
+      dockerfile: Dockerfile
+    ports:
+      - 4200:80
+    depends_on:
+      - keycloak
+    networks:
+      - app-network
+
+volumes:
+  sqlserver_data:
+    name: sqlserver_data_new
+
+networks:
+  app-network:
